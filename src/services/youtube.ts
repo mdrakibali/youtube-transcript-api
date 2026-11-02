@@ -53,6 +53,16 @@ function getRandomProxy(): string | null {
   return list[Math.floor(Math.random() * list.length)];
 }
 
+function maskProxy(proxyUrl: string | null): string {
+  if (!proxyUrl) return 'Direct / No Proxy';
+  try {
+    const parsed = new URL(proxyUrl);
+    return `${parsed.hostname}:${parsed.port}`;
+  } catch {
+    return 'Active Proxy';
+  }
+}
+
 // Single lazy-loaded Innertube instance reused across requests
 let innertubeInstance: Innertube | null = null;
 
@@ -74,8 +84,11 @@ async function getInnertube(): Promise<Innertube> {
       };
     }
 
+    console.log(
+      `[Tier 1: Native] Initializing Innertube session (Proxy Pool: ${proxyList.length} proxies configured)`
+    );
+
     innertubeInstance = await Innertube.create({
-      cookie: cookie ? cookie.trim() : undefined,
       fetch: customFetch
     });
   }
@@ -85,20 +98,29 @@ async function getInnertube(): Promise<Innertube> {
 /**
  * Directly downloads and parses YouTube's signed JSON3 timedtext track.
  */
-async function fetchTimedTextSegments(baseUrl: string): Promise<NormalizedSegment[]> {
+async function fetchTimedTextSegments(
+  baseUrl: string,
+  proxyUrl?: string | null
+): Promise<{ segments: NormalizedSegment[]; proxyUsed: string }> {
   const url = baseUrl.includes('fmt=')
     ? baseUrl.replace(/fmt=[^&]+/, 'fmt=json3')
     : `${baseUrl}&fmt=json3`;
 
   const cookie = process.env.YOUTUBE_COOKIE;
-  const proxy = getRandomProxy();
+  const proxy = proxyUrl !== undefined ? proxyUrl : getRandomProxy();
+  const hasCookie = Boolean(cookie && cookie.trim().length > 0);
+  const maskedProxy = maskProxy(proxy);
+
+  console.log(
+    `[Tier 1: Native] 📡 TimedText Request -> Proxy: [${maskedProxy}] | Cookies: [${hasCookie ? 'YES' : 'NO'}]`
+  );
 
   const headers: Record<string, string> = {
     'User-Agent':
       'com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip'
   };
-  if (cookie) {
-    headers['Cookie'] = cookie.trim();
+  if (hasCookie) {
+    headers['Cookie'] = cookie!.trim();
   }
 
   const fetchOptions: any = { headers };
@@ -115,7 +137,7 @@ async function fetchTimedTextSegments(baseUrl: string): Promise<NormalizedSegmen
   const data: any = await res.json();
   const events = data.events || [];
 
-  return events
+  const segments: NormalizedSegment[] = events
     .filter((e: any) => e.segs && e.segs.length > 0)
     .map((e: any) => {
       const text = e.segs.map((s: any) => s.utf8 || '').join('').trim();
@@ -128,6 +150,8 @@ async function fetchTimedTextSegments(baseUrl: string): Promise<NormalizedSegmen
       };
     })
     .filter((s: NormalizedSegment) => s.text.length > 0);
+
+  return { segments, proxyUsed: maskedProxy };
 }
 
 /**
@@ -140,7 +164,9 @@ async function fetchNativeTranscript(
   segments: NormalizedSegment[];
   availableLanguages: AvailableLanguage[];
   selected: SelectedLanguage;
+  proxyUsed: string;
 } | null> {
+  let proxyUsed = 'None';
   try {
     const yt = await getInnertube();
     const info = await yt.getBasicInfo(videoId, { client: ClientType.ANDROID });
@@ -181,18 +207,24 @@ async function fetchNativeTranscript(
 
     if (matchingTrack?.base_url) {
       try {
-        segments = await fetchTimedTextSegments(matchingTrack.base_url);
-      } catch {
-        // Fall through to fallback library
+        const timedTextResult = await fetchTimedTextSegments(matchingTrack.base_url);
+        segments = timedTextResult.segments;
+        proxyUsed = timedTextResult.proxyUsed;
+      } catch (err: any) {
+        console.warn(
+          `[Tier 1: Native] ⚠️ TimedText fetch failed: ${err?.message || err}. Trying fallback library...`
+        );
       }
     }
 
     // Try fallback library if timedtext failed
     if (!segments || segments.length === 0) {
       try {
+        console.log(`[Tier 1: Native] Trying fallback library (youtube-transcript-plus)...`);
         segments = await fetchFallbackTranscript(videoId, selected.code);
-      } catch {
-        // Failed
+        proxyUsed = 'Direct (fallback library)';
+      } catch (err: any) {
+        console.warn(`[Tier 1: Native] ⚠️ Fallback library failed: ${err?.message || err}`);
       }
     }
 
@@ -203,9 +235,11 @@ async function fetchNativeTranscript(
     return {
       segments,
       availableLanguages,
-      selected
+      selected,
+      proxyUsed
     };
-  } catch {
+  } catch (err: any) {
+    console.warn(`[Tier 1: Native] ⚠️ Innertube getBasicInfo failed: ${err?.message || err}`);
     // If Innertube failed completely, try youtube-transcript-plus directly
     try {
       const fallbackLanguages = await getFallbackLanguages(videoId);
@@ -216,9 +250,13 @@ async function fetchNativeTranscript(
       return {
         segments,
         availableLanguages: fallbackLanguages,
-        selected
+        selected,
+        proxyUsed: 'Direct (fallback library)'
       };
-    } catch {
+    } catch (fallbackErr: any) {
+      console.warn(
+        `[Tier 1: Native] ⚠️ Fallback library also failed: ${fallbackErr?.message || fallbackErr}`
+      );
       return null;
     }
   }
@@ -256,7 +294,14 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallbackValue: T): Prom
 }
 
   // --- Tier 1: Native Scraper (8s max timeout to prevent cloud hanging) ---
-  console.log(`[Tier 1: Native] Fetching transcript for video: ${videoId}`);
+  const proxyList = getProxyList();
+  const hasCookies = Boolean(
+    process.env.YOUTUBE_COOKIE && process.env.YOUTUBE_COOKIE.trim().length > 0
+  );
+  console.log(
+    `[Tier 1: Native] 🚀 Processing video: ${videoId} (Proxy Pool: ${proxyList.length} configured | Cookies: ${hasCookies ? 'ACTIVE' : 'NONE'})`
+  );
+
   const nativeResult = await withTimeout(
     fetchNativeTranscript(videoId, langParam),
     8000,
@@ -273,7 +318,9 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallbackValue: T): Prom
       startMs: s.startMs,
       durationMs: s.durationMs
     }));
-    console.log(`[Tier 1: Native] ✅ SUCCESS: Got ${segments.length} segments (lang: ${language})`);
+    console.log(
+      `[Tier 1: Native] ✅ SUCCESS: Got ${segments.length} segments (lang: ${language}) | Proxy: [${nativeResult.proxyUsed}] | Cookies: [${hasCookies ? 'ATTACHED' : 'NONE'}]`
+    );
   } else {
     console.warn(`[Tier 1: Native] ⚠️ FAILED or timed out. Trying Tier 2 (Supadata)...`);
   }
