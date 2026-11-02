@@ -6,6 +6,13 @@ import { mapErrorToAppError } from './lib/errors.js';
 import { parseVideoId } from './lib/parse-video-id.js';
 import { getVideoData } from './services/youtube.js';
 
+// Automatically load local .env file if present
+try {
+  process.loadEnvFile?.();
+} catch {
+  // Ignored if .env file is missing (e.g. in production / Render)
+}
+
 const app = new Hono();
 
 /**
