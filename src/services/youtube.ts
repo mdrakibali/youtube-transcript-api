@@ -198,9 +198,20 @@ export async function getVideoData(
   let availableLanguages: string[] = [];
   let selected: SelectedLanguage | undefined = undefined;
 
-  // --- Tier 1: Native Scraper ---
+function withTimeout<T>(promise: Promise<T>, ms: number, fallbackValue: T): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallbackValue), ms))
+  ]);
+}
+
+  // --- Tier 1: Native Scraper (5s max timeout to prevent cloud hanging) ---
   console.log(`[Tier 1: Native] Fetching transcript for video: ${videoId}`);
-  const nativeResult = await fetchNativeTranscript(videoId, langParam);
+  const nativeResult = await withTimeout(
+    fetchNativeTranscript(videoId, langParam),
+    5000,
+    null
+  );
   if (nativeResult && nativeResult.segments.length > 0) {
     provider = 'native';
     selected = nativeResult.selected;
@@ -214,7 +225,7 @@ export async function getVideoData(
     }));
     console.log(`[Tier 1: Native] ✅ SUCCESS: Got ${segments.length} segments (lang: ${language})`);
   } else {
-    console.warn(`[Tier 1: Native] ⚠️ FAILED or no captions found. Trying Tier 2 (Supadata)...`);
+    console.warn(`[Tier 1: Native] ⚠️ FAILED or timed out. Trying Tier 2 (Supadata)...`);
   }
 
   // --- Tier 2: Supadata API Fallback ---

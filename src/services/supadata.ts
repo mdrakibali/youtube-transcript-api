@@ -24,6 +24,7 @@ export async function fetchSupadataTranscript(
 ): Promise<ExternalTranscriptResult | null> {
   const apiKey = process.env.SUPADATA_API_KEY;
   if (!apiKey) {
+    console.error('[Tier 2: Supadata] ❌ SUPADATA_API_KEY is missing in Render environment variables!');
     return null;
   }
 

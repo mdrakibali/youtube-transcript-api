@@ -11,6 +11,7 @@ export async function fetchCapslaneTranscript(
 ): Promise<ExternalTranscriptResult | null> {
   const apiKey = process.env.CAPSLANE_API_KEY;
   if (!apiKey) {
+    console.error('[Tier 3: Capslane] ❌ CAPSLANE_API_KEY is missing in Render environment variables!');
     return null;
   }
 
