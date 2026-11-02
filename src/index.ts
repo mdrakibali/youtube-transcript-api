@@ -1,5 +1,6 @@
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
+import { logger } from 'hono/logger';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import { mapErrorToAppError } from './lib/errors.js';
@@ -14,6 +15,9 @@ try {
 }
 
 const app = new Hono();
+
+// HTTP Request Logger (visible in Render logs)
+app.use('*', logger());
 
 /**
  * Constant-time comparison for API keys using SHA-256 digests.
