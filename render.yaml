@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: youtube-transcript-api
+    runtime: node
+    plan: free
+    buildCommand: pnpm install --prod=false && pnpm run build
+    startCommand: pnpm start
+    healthCheckPath: /health
+    envVars:
+      - key: API_KEY
+        sync: false
