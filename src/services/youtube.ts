@@ -1,4 +1,4 @@
-import { Innertube } from 'youtubei.js';
+import { Innertube, ClientType } from 'youtubei.js';
 import { AppError } from '../lib/errors.js';
 import { formatTimestamp } from '../lib/format-timestamp.js';
 import {
@@ -121,9 +121,10 @@ export async function getVideoData(
 
   try {
     const yt = await getInnertube();
-    info = await yt.getInfo(videoId);
+    // Use official Android client to prevent cloud datacenter bot-detection blocks
+    info = await yt.getBasicInfo(videoId, { client: ClientType.ANDROID });
 
-    // If playability status is not OK (e.g. LOGIN_REQUIRED / bot check on datacenter IP)
+    // If playability status is not OK
     if (info.playability_status && info.playability_status.status !== 'OK') {
       useFallbackDirectly = true;
     }
