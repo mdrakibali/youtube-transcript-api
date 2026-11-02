@@ -33,12 +33,32 @@ export interface TranscriptApiResponse {
   fullText?: string;
 }
 
+import { HttpsProxyAgent } from 'https-proxy-agent';
+
 // Single lazy-loaded Innertube instance reused across requests
 let innertubeInstance: Innertube | null = null;
 
 async function getInnertube(): Promise<Innertube> {
   if (!innertubeInstance) {
-    innertubeInstance = await Innertube.create();
+    const cookie = process.env.YOUTUBE_COOKIE;
+    const proxy = process.env.YOUTUBE_PROXY || process.env.HTTP_PROXY;
+
+    let customFetch: typeof fetch | undefined = undefined;
+    if (proxy) {
+      const agent = new HttpsProxyAgent(proxy.trim());
+      customFetch = (url, init) => {
+        return fetch(url, {
+          ...init,
+          // @ts-ignore
+          agent
+        });
+      };
+    }
+
+    innertubeInstance = await Innertube.create({
+      cookie: cookie ? cookie.trim() : undefined,
+      fetch: customFetch
+    });
   }
   return innertubeInstance;
 }
@@ -51,12 +71,23 @@ async function fetchTimedTextSegments(baseUrl: string): Promise<NormalizedSegmen
     ? baseUrl.replace(/fmt=[^&]+/, 'fmt=json3')
     : `${baseUrl}&fmt=json3`;
 
-  const res = await fetch(url, {
-    headers: {
-      'User-Agent':
-        'com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip'
-    }
-  });
+  const cookie = process.env.YOUTUBE_COOKIE;
+  const proxy = process.env.YOUTUBE_PROXY || process.env.HTTP_PROXY;
+
+  const headers: Record<string, string> = {
+    'User-Agent':
+      'com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip'
+  };
+  if (cookie) {
+    headers['Cookie'] = cookie.trim();
+  }
+
+  const fetchOptions: any = { headers };
+  if (proxy) {
+    fetchOptions.agent = new HttpsProxyAgent(proxy.trim());
+  }
+
+  const res = await fetch(url, fetchOptions);
 
   if (!res.ok) {
     throw new Error(`Timedtext fetch failed with status ${res.status}`);
@@ -205,11 +236,11 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallbackValue: T): Prom
   ]);
 }
 
-  // --- Tier 1: Native Scraper (5s max timeout to prevent cloud hanging) ---
+  // --- Tier 1: Native Scraper (8s max timeout to prevent cloud hanging) ---
   console.log(`[Tier 1: Native] Fetching transcript for video: ${videoId}`);
   const nativeResult = await withTimeout(
     fetchNativeTranscript(videoId, langParam),
-    5000,
+    8000,
     null
   );
   if (nativeResult && nativeResult.segments.length > 0) {
