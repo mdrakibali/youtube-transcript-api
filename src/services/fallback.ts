@@ -8,6 +8,21 @@ export interface NormalizedSegment {
   durationMs: number;
 }
 
+export interface FallbackFullResult {
+  metadata: {
+    title: string;
+    channel: string;
+    channelId: string;
+    description: string;
+    durationSeconds: number;
+    publishedAt: string | null;
+    viewCount: number;
+    thumbnails: Array<{ url: string; width?: number; height?: number }>;
+  };
+  availableLanguages: AvailableLanguage[];
+  segments: NormalizedSegment[];
+}
+
 /**
  * Fetches transcript segments using youtube-transcript-plus as a fallback.
  * Strictly performs at most one attempt with no retry loops.
@@ -54,5 +69,56 @@ export async function getFallbackLanguages(videoId: string): Promise<AvailableLa
     }));
   } catch {
     return [];
+  }
+}
+
+/**
+ * Full fallback: retrieves both video metadata and transcript segments
+ * when Innertube is blocked by cloud bot-detection ("Sign in to confirm you're not a bot").
+ */
+export async function fetchFallbackFull(
+  videoId: string,
+  langCode?: string
+): Promise<FallbackFullResult> {
+  try {
+    const yt = new YoutubeTranscript({
+      videoDetails: true,
+      lang: langCode
+    });
+    const rawResult: any = await yt.fetchTranscript(videoId);
+
+    const details = rawResult.videoDetails || {};
+    const rawSegments = rawResult.segments || (Array.isArray(rawResult) ? rawResult : []);
+
+    const languages = await getFallbackLanguages(videoId);
+
+    const segments: NormalizedSegment[] = rawSegments.map(
+      (segment: { text: string; offset: number; duration: number }) => ({
+        text: segment.text,
+        startMs: Math.max(0, Math.round((segment.offset || 0) * 1000)),
+        durationMs: Math.max(0, Math.round((segment.duration || 0) * 1000))
+      })
+    );
+
+    return {
+      metadata: {
+        title: details.title || '',
+        channel: details.author || '',
+        channelId: details.channelId || '',
+        description: details.description || '',
+        durationSeconds: parseInt(String(details.lengthSeconds || 0), 10) || 0,
+        publishedAt: null,
+        viewCount: parseInt(String(details.viewCount || 0), 10) || 0,
+        thumbnails: (details.thumbnails || []).map((t: any) => ({
+          url: t.url,
+          width: t.width,
+          height: t.height
+        }))
+      },
+      availableLanguages: languages,
+      segments
+    };
+  } catch (err) {
+    throw mapErrorToAppError(err);
   }
 }

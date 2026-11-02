@@ -1,5 +1,5 @@
 import { Innertube } from 'youtubei.js';
-import { AppError, mapErrorToAppError } from '../lib/errors.js';
+import { AppError } from '../lib/errors.js';
 import { formatTimestamp } from '../lib/format-timestamp.js';
 import {
   selectLanguage,
@@ -7,6 +7,7 @@ import {
   type SelectedLanguage
 } from '../lib/select-language.js';
 import {
+  fetchFallbackFull,
   fetchFallbackTranscript,
   getFallbackLanguages,
   type NormalizedSegment
@@ -52,28 +53,87 @@ export async function getInnertube(): Promise<Innertube> {
 }
 
 /**
+ * Handles fallback when Innertube is blocked by bot detection ("Sign in to confirm you're not a bot")
+ * or fails on cloud datacenter IPs.
+ */
+async function getVideoDataFromFallback(
+  videoId: string,
+  langParam?: string,
+  formatParam?: string
+): Promise<VideoApiResponse> {
+  let availableLanguages = await getFallbackLanguages(videoId);
+  let targetLang: string | undefined = undefined;
+  let selected: SelectedLanguage | null = null;
+
+  if (availableLanguages.length > 0) {
+    selected = selectLanguage(availableLanguages, langParam);
+    targetLang = selected.code;
+  }
+
+  const fallback = await fetchFallbackFull(videoId, targetLang);
+
+  if (availableLanguages.length === 0) {
+    availableLanguages = fallback.availableLanguages;
+  }
+
+  if (availableLanguages.length === 0) {
+    throw new AppError(404, 'NO_CAPTIONS', 'No captions available for this video.');
+  }
+
+  if (!selected) {
+    selected = selectLanguage(availableLanguages, langParam);
+  }
+
+  const formattedTranscript = fallback.segments.map((seg) => ({
+    text: seg.text,
+    startMs: seg.startMs,
+    durationMs: seg.durationMs,
+    start: formatTimestamp(seg.startMs)
+  }));
+
+  const fullText =
+    formatParam === 'text-timestamps'
+      ? formattedTranscript.map((s) => `[${s.start}] ${s.text}`).join('\n')
+      : formattedTranscript.map((s) => s.text).join(' ');
+
+  return {
+    videoId,
+    metadata: fallback.metadata,
+    availableLanguages,
+    selected,
+    transcript: formattedTranscript,
+    fullText
+  };
+}
+
+/**
  * Fetches video details, captions track list, and transcript.
  * Primary: youtubei.js (Innertube).
- * Fallback: youtube-transcript-plus (used only if youtubei.js fails to return a transcript).
+ * Fallback: youtube-transcript-plus (used if Innertube fails, is blocked, or returns no transcript).
  */
 export async function getVideoData(
   videoId: string,
   langParam?: string,
   formatParam?: string
 ): Promise<VideoApiResponse> {
-  const yt = await getInnertube();
-  let info: any;
+  let info: any = null;
+  let useFallbackDirectly = false;
 
   try {
+    const yt = await getInnertube();
     info = await yt.getInfo(videoId);
-  } catch (error) {
-    throw mapErrorToAppError(error);
+
+    // If playability status is not OK (e.g. LOGIN_REQUIRED / bot check on datacenter IP)
+    if (info.playability_status && info.playability_status.status !== 'OK') {
+      useFallbackDirectly = true;
+    }
+  } catch {
+    useFallbackDirectly = true;
   }
 
-  // Check playability
-  if (info.playability_status && info.playability_status.status !== 'OK') {
-    const reason = info.playability_status.reason || 'Video is unavailable';
-    throw new AppError(404, 'VIDEO_UNAVAILABLE', reason);
+  // If primary provider is blocked or failed, seamlessly fall back to youtube-transcript-plus
+  if (useFallbackDirectly || !info) {
+    return getVideoDataFromFallback(videoId, langParam, formatParam);
   }
 
   const basic = info.basic_info;
