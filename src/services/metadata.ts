@@ -74,10 +74,14 @@ async function fetchOEmbedMetadata(videoId: string): Promise<VideoMetadata | nul
  * 2. Falls back to YouTube oEmbed API (guaranteed to succeed without bot-blocks).
  */
 export async function fetchVideoMetadata(videoId: string): Promise<VideoMetadata> {
-  // 1. Try Innertube Basic Info (Android client)
+  // 1. Try Innertube Basic Info (Android client with 2.5s timeout)
   try {
     const yt = await getInnertube();
-    const info = await yt.getBasicInfo(videoId, { client: ClientType.ANDROID });
+    const infoPromise = yt.getBasicInfo(videoId, { client: ClientType.ANDROID });
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Metadata timeout')), 2500)
+    );
+    const info: any = await Promise.race([infoPromise, timeoutPromise]);
     const basic = info.basic_info;
 
     if (basic && basic.title) {
@@ -106,7 +110,7 @@ export async function fetchVideoMetadata(videoId: string): Promise<VideoMetadata
       };
     }
   } catch {
-    // Innertube failed or blocked, proceed to oEmbed fallback
+    // Innertube failed or timed out, proceed immediately to oEmbed fallback
   }
 
   // 2. Fallback to YouTube oEmbed API

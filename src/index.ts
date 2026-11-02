@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import { mapErrorToAppError } from './lib/errors.js';
 import { parseVideoId } from './lib/parse-video-id.js';
-import { getVideoData } from './services/youtube.js';
+import { getVideoData, getInnertube } from './services/youtube.js';
 
 // Automatically load local .env file if present
 try {
@@ -189,6 +189,8 @@ if (process.env.NODE_ENV !== 'test') {
     },
     (info) => {
       console.log(`Server is running on port ${info.port}`);
+      // Pre-warm Innertube in the background so the first request doesn't wait
+      getInnertube().catch(() => {});
     }
   );
 }

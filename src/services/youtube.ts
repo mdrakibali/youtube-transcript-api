@@ -66,9 +66,8 @@ function maskProxy(proxyUrl: string | null): string {
 // Single lazy-loaded Innertube instance reused across requests
 let innertubeInstance: Innertube | null = null;
 
-async function getInnertube(): Promise<Innertube> {
+export async function getInnertube(): Promise<Innertube> {
   if (!innertubeInstance) {
-    const cookie = process.env.YOUTUBE_COOKIE;
     const proxyList = getProxyList();
 
     let customFetch: typeof fetch | undefined = undefined;
@@ -79,7 +78,8 @@ async function getInnertube(): Promise<Innertube> {
         return fetch(url, {
           ...init,
           // @ts-ignore
-          agent
+          agent,
+          signal: init?.signal || AbortSignal.timeout(3500)
         });
       };
     }
@@ -123,7 +123,10 @@ async function fetchTimedTextSegments(
     headers['Cookie'] = cookie!.trim();
   }
 
-  const fetchOptions: any = { headers };
+  const fetchOptions: any = {
+    headers,
+    signal: AbortSignal.timeout(3500)
+  };
   if (proxy) {
     fetchOptions.agent = new HttpsProxyAgent(proxy);
   }
@@ -293,7 +296,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallbackValue: T): Prom
   ]);
 }
 
-  // --- Tier 1: Native Scraper (8s max timeout to prevent cloud hanging) ---
+  // --- Tier 1: Native Scraper (4s max timeout to prevent cloud hanging) ---
   const proxyList = getProxyList();
   const hasCookies = Boolean(
     process.env.YOUTUBE_COOKIE && process.env.YOUTUBE_COOKIE.trim().length > 0
@@ -304,7 +307,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallbackValue: T): Prom
 
   const nativeResult = await withTimeout(
     fetchNativeTranscript(videoId, langParam),
-    8000,
+    4000,
     null
   );
   if (nativeResult && nativeResult.segments.length > 0) {
