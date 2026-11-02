@@ -35,18 +35,37 @@ export interface TranscriptApiResponse {
 
 import { HttpsProxyAgent } from 'https-proxy-agent';
 
+function getProxyList(): string[] {
+  const raw =
+    process.env.YOUTUBE_PROXIES ||
+    process.env.YOUTUBE_PROXY ||
+    process.env.HTTP_PROXY ||
+    '';
+  return raw
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean);
+}
+
+function getRandomProxy(): string | null {
+  const list = getProxyList();
+  if (list.length === 0) return null;
+  return list[Math.floor(Math.random() * list.length)];
+}
+
 // Single lazy-loaded Innertube instance reused across requests
 let innertubeInstance: Innertube | null = null;
 
 async function getInnertube(): Promise<Innertube> {
   if (!innertubeInstance) {
     const cookie = process.env.YOUTUBE_COOKIE;
-    const proxy = process.env.YOUTUBE_PROXY || process.env.HTTP_PROXY;
+    const proxyList = getProxyList();
 
     let customFetch: typeof fetch | undefined = undefined;
-    if (proxy) {
-      const agent = new HttpsProxyAgent(proxy.trim());
+    if (proxyList.length > 0) {
       customFetch = (url, init) => {
+        const proxy = getRandomProxy();
+        const agent = proxy ? new HttpsProxyAgent(proxy) : undefined;
         return fetch(url, {
           ...init,
           // @ts-ignore
@@ -72,7 +91,7 @@ async function fetchTimedTextSegments(baseUrl: string): Promise<NormalizedSegmen
     : `${baseUrl}&fmt=json3`;
 
   const cookie = process.env.YOUTUBE_COOKIE;
-  const proxy = process.env.YOUTUBE_PROXY || process.env.HTTP_PROXY;
+  const proxy = getRandomProxy();
 
   const headers: Record<string, string> = {
     'User-Agent':
@@ -84,7 +103,7 @@ async function fetchTimedTextSegments(baseUrl: string): Promise<NormalizedSegmen
 
   const fetchOptions: any = { headers };
   if (proxy) {
-    fetchOptions.agent = new HttpsProxyAgent(proxy.trim());
+    fetchOptions.agent = new HttpsProxyAgent(proxy);
   }
 
   const res = await fetch(url, fetchOptions);
