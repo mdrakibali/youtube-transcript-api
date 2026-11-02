@@ -4,30 +4,34 @@ A lightweight, high-performance Node.js + TypeScript + Hono API that fetches You
 
 ## Features
 
-- **Single Primary Endpoint**: `GET /api/video` returns video metadata, available caption tracks, and normalized transcript segments in one request.
-- **Multi-Source Resilience**: Uses `youtubei.js` (Innertube) as the primary provider for video info and transcripts, with seamless fallback to `youtube-transcript-plus` if transcript retrieval fails.
-- **Smart Language Selection**:
-  1. Matches comma-separated user preference list (e.g. `lang=bn,en`), prioritizing manual tracks over auto-generated.
-  2. Detects video original spoken language (from ASR track or first manual track).
-  3. Gracefully falls back to English (`en`) or the first available track, clearly marking `selected.reason`.
-- **Timestamp Normalization**: Normalizes all timestamps to milliseconds (`startMs`, `durationMs`) and provides human-readable `HH:MM:SS` (or `MM:SS` when under 1 hour) segment markers.
-- **Format Options**: Supports standard JSON and `format=text-timestamps` (lines formatted as `[HH:MM:SS] text` in `fullText`).
+- **Primary Endpoint**: `GET /api/v1/transcript` returns video metadata, available languages, and normalized transcript segments in one request.
+- **3-Tier Intelligent Fallback**:
+  1. **Tier 1 (Native Scraper)**: High-speed extraction via `youtubei.js` Android client and direct signed `timedtext` JSON3 tracks, plus `youtube-transcript-plus`.
+  2. **Tier 2 (Supadata AI)**: Automated failover to Supadata transcript API if native extraction fails or captions are unavailable.
+  3. **Tier 3 (Capslane API)**: Final failover to Capslane API if Supadata fails.
+- **Guaranteed Video Metadata**: Video title, channel name, channel ID, thumbnails, and duration are always retrieved using Android client metadata or official YouTube oEmbed fallback (zero bot blocks).
+- **Conditional Full Text**: Clean payload by default. Include `fullText=true` only when the concatenated string of the transcript is needed.
+- **Timestamp Normalization**: Normalizes all timestamps to milliseconds (`startMs`, `durationMs`) and human-readable `HH:MM:SS` (or `MM:SS`).
 - **Constant-Time Auth**: Timing-safe header verification (`x-api-key`) via SHA-256 digests and `crypto.timingSafeEqual`.
-- **Render Ready**: Optimized for cold starts (lazy Innertube initialization), reads `PORT` from environment, and includes a public `GET /health` check.
+- **Render Ready**: Optimized for cold starts, reads `PORT` from environment, and includes a public `GET /health` check.
 
 ---
 
 ## Environment Variables
 
-| Variable  | Description                                                         | Default | Required |
-|-----------|---------------------------------------------------------------------|---------|----------|
-| `PORT`    | Port number the HTTP server listens on (set automatically on Render)| `3000`  | No       |
-| `API_KEY` | Secret key required in the `x-api-key` request header               | —       | **Yes**  |
+| Variable           | Description                                                         | Required |
+|--------------------|---------------------------------------------------------------------|----------|
+| `PORT`             | Port number the HTTP server listens on (set automatically on Render)| No       |
+| `API_KEY`          | Secret key required in the `x-api-key` request header               | **Yes**  |
+| `SUPADATA_API_KEY` | Optional API key for Tier 2 fallback via Supadata                   | No       |
+| `CAPSLANE_API_KEY` | Optional API key for Tier 3 fallback via Capslane                   | No       |
 
-Create a local `.env` file (or export variables in your shell):
+Create a local `.env` file (or export variables in your shell / Render dashboard):
 ```bash
 PORT=3000
 API_KEY=your_secret_api_key_here
+SUPADATA_API_KEY=sd_...
+CAPSLANE_API_KEY=...
 ```
 
 ---
@@ -42,46 +46,48 @@ API_KEY=your_secret_api_key_here
 curl -X GET http://localhost:3000/health
 ```
 
-**Response:**
-```json
-{
-  "status": "ok",
-  "timestamp": "2026-11-02T11:45:00.000Z",
-  "uptime": 12.34
-}
+---
+
+### 2. Video Info & Transcript (Primary)
+
+`GET /api/v1/transcript` (Requires `x-api-key` header)
+
+#### Query Parameters
+
+- `url` *(required)*: Full YouTube URL (`watch?v=`, `youtu.be/`, `shorts/`, `embed/`, `m.youtube.com`) or bare 11-character video ID.
+- `lang` *(optional)*: Language code preference (e.g. `bn`, `en`, `es`).
+- `fullText` *(optional)*: `true` / `false`. If `true`, returns the concatenated `fullText` property. Default is `false`.
+
+#### Example Requests
+
+**Standard query without fullText:**
+
+```bash
+curl -X GET "http://localhost:3000/api/v1/transcript?url=https://youtu.be/pirRLSb4hVc" \
+  -H "x-api-key: your_secret_api_key_here"
+```
+
+**With fullText included:**
+
+```bash
+curl -X GET "http://localhost:3000/api/v1/transcript?url=https://youtu.be/pirRLSb4hVc&fullText=true" \
+  -H "x-api-key: your_secret_api_key_here"
 ```
 
 ---
 
-### 2. Video Info & Transcript
+### 3. Legacy Video Info Endpoint
+
 `GET /api/video` (Requires `x-api-key` header)
 
-#### Query Parameters:
-- `url` *(required)*: Full YouTube URL (`watch?v=`, `youtu.be/`, `shorts/`, `embed/`, `m.youtube.com`) or bare 11-character video ID.
-- `lang` *(optional)*: Comma-separated priority list of ISO language codes (e.g. `bn,en`, `es`).
-- `format` *(optional)*: `json` (default) or `text-timestamps`.
+Supports legacy `format=text-timestamps` query parameter and returns fullText by default.
 
-#### Example Requests:
-
-**Standard query with bare video ID:**
 ```bash
 curl -X GET "http://localhost:3000/api/video?url=dQw4w9WgXcQ" \
   -H "x-api-key: your_secret_api_key_here"
 ```
 
-**With full watch URL and language preference:**
-```bash
-curl -X GET "http://localhost:3000/api/video?url=https://www.youtube.com/watch?v=kJQP7kiw5Fk&lang=es,en" \
-  -H "x-api-key: your_secret_api_key_here"
-```
-
-**With timestamped text format (`format=text-timestamps`):**
-```bash
-curl -X GET "http://localhost:3000/api/video?url=dQw4w9WgXcQ&format=text-timestamps" \
-  -H "x-api-key: your_secret_api_key_here"
-```
-
-#### Response Structure:
+#### Response Structure
 ```json
 {
   "videoId": "dQw4w9WgXcQ",

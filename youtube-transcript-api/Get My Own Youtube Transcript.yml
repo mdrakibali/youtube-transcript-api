@@ -5,7 +5,7 @@ info:
 
 http:
   method: GET
-  url: http://localhost:8080/api/video?url=https://youtu.be/pirRLSb4hVc&format=text-timestamps
+  url: http://localhost:8080/api/v1/transcript?url=https://youtu.be/pirRLSb4hVc&fullText=false
   headers:
     - name: x-api-key
       value: 7916df3bb763de7e5c9b4f80e8b28a3cbed272a70a752152290a9a949424acea
@@ -13,8 +13,8 @@ http:
     - name: url
       value: https://youtu.be/pirRLSb4hVc
       type: query
-    - name: format
-      value: text-timestamps
+    - name: fullText
+      value: "false"
       type: query
   auth: inherit
 

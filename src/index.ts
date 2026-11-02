@@ -65,20 +65,63 @@ app.get('/health', (c) => {
   });
 });
 
-// Video query validation schema
-const querySchema = z.object({
+// Validation schema for new /api/v1/transcript endpoint
+const transcriptQuerySchema = z.object({
+  url: z.string().min(1, 'Query parameter "url" (or video ID) is required.'),
+  lang: z.string().optional(),
+  fullText: z.preprocess((val) => {
+    if (typeof val === 'string') {
+      return val.toLowerCase() === 'true' || val === '1';
+    }
+    return Boolean(val);
+  }, z.boolean().optional())
+});
+
+// Legacy video query validation schema
+const legacyQuerySchema = z.object({
   url: z.string().min(1, 'Query parameter "url" (or video ID) is required.'),
   lang: z.string().optional(),
   format: z.enum(['json', 'text-timestamps']).optional()
 });
 
-// Video metadata + transcript endpoint
+// Primary transcript endpoint: /api/v1/transcript
+app.get('/api/v1/transcript', async (c) => {
+  const rawUrl = c.req.query('url') || c.req.query('id');
+  const rawLang = c.req.query('lang');
+  const rawFullText = c.req.query('fullText') ?? c.req.query('full_text');
+
+  const validation = transcriptQuerySchema.safeParse({
+    url: rawUrl,
+    lang: rawLang,
+    fullText: rawFullText
+  });
+
+  if (!validation.success) {
+    const issue = validation.error.issues[0]?.message || 'Invalid query parameters.';
+    return c.json(
+      {
+        error: 'INVALID_URL',
+        message: issue
+      },
+      400
+    );
+  }
+
+  const { url, lang, fullText } = validation.data;
+  const videoId = parseVideoId(url);
+
+  const data = await getVideoData(videoId, lang, Boolean(fullText));
+  return c.json(data);
+});
+
+// Backward-compatible endpoint: /api/video
 app.get('/api/video', async (c) => {
   const rawUrl = c.req.query('url') || c.req.query('id');
   const rawLang = c.req.query('lang');
   const rawFormat = c.req.query('format');
+  const rawFullText = c.req.query('fullText') ?? c.req.query('full_text');
 
-  const validation = querySchema.safeParse({
+  const validation = legacyQuerySchema.safeParse({
     url: rawUrl,
     lang: rawLang,
     format: rawFormat
@@ -98,7 +141,13 @@ app.get('/api/video', async (c) => {
   const { url, lang, format } = validation.data;
   const videoId = parseVideoId(url);
 
-  const data = await getVideoData(videoId, lang, format);
+  // Default to true for legacy endpoint unless explicitly disabled
+  const includeFullText =
+    rawFullText !== undefined
+      ? rawFullText === 'true' || rawFullText === '1'
+      : true;
+
+  const data = await getVideoData(videoId, lang, includeFullText, format);
   return c.json(data);
 });
 
