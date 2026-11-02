@@ -199,6 +199,7 @@ export async function getVideoData(
   let selected: SelectedLanguage | undefined = undefined;
 
   // --- Tier 1: Native Scraper ---
+  console.log(`[Tier 1: Native] Fetching transcript for video: ${videoId}`);
   const nativeResult = await fetchNativeTranscript(videoId, langParam);
   if (nativeResult && nativeResult.segments.length > 0) {
     provider = 'native';
@@ -211,27 +212,38 @@ export async function getVideoData(
       startMs: s.startMs,
       durationMs: s.durationMs
     }));
+    console.log(`[Tier 1: Native] ✅ SUCCESS: Got ${segments.length} segments (lang: ${language})`);
+  } else {
+    console.warn(`[Tier 1: Native] ⚠️ FAILED or no captions found. Trying Tier 2 (Supadata)...`);
   }
 
   // --- Tier 2: Supadata API Fallback ---
   if (segments.length === 0) {
+    console.log(`[Tier 2: Supadata] Calling Supadata API for video: ${videoId}`);
     const supadataResult = await fetchSupadataTranscript(videoId, langParam);
     if (supadataResult && supadataResult.segments.length > 0) {
       provider = 'supadata';
       language = supadataResult.language;
       availableLanguages = supadataResult.availableLanguages;
       segments = supadataResult.segments;
+      console.log(`[Tier 2: Supadata] ✅ SUCCESS: Got ${segments.length} segments (lang: ${language})`);
+    } else {
+      console.warn(`[Tier 2: Supadata] ⚠️ FAILED or unavailable. Trying Tier 3 (Capslane)...`);
     }
   }
 
   // --- Tier 3: Capslane API Fallback ---
   if (segments.length === 0) {
+    console.log(`[Tier 3: Capslane] Calling Capslane API for video: ${videoId}`);
     const capslaneResult = await fetchCapslaneTranscript(videoId, langParam);
     if (capslaneResult && capslaneResult.segments.length > 0) {
       provider = 'capslane';
       language = capslaneResult.language;
       availableLanguages = capslaneResult.availableLanguages;
       segments = capslaneResult.segments;
+      console.log(`[Tier 3: Capslane] ✅ SUCCESS: Got ${segments.length} segments (lang: ${language})`);
+    } else {
+      console.error(`[Tier 3: Capslane] ❌ FAILED or unavailable.`);
     }
   }
 
