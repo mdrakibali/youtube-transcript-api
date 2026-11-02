@@ -53,8 +53,45 @@ export async function getInnertube(): Promise<Innertube> {
 }
 
 /**
- * Handles fallback when Innertube is blocked by bot detection ("Sign in to confirm you're not a bot")
- * or fails on cloud datacenter IPs.
+ * Directly downloads and parses YouTube's signed JSON3 timedtext track.
+ * This completely avoids HTML watch-page scraping, bot-checks, and parser mismatches.
+ */
+async function fetchTimedTextSegments(baseUrl: string): Promise<NormalizedSegment[]> {
+  const url = baseUrl.includes('fmt=')
+    ? baseUrl.replace(/fmt=[^&]+/, 'fmt=json3')
+    : `${baseUrl}&fmt=json3`;
+
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent':
+        'com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip'
+    }
+  });
+
+  if (!res.ok) {
+    throw new Error(`Timedtext fetch failed with status ${res.status}`);
+  }
+
+  const data: any = await res.json();
+  const events = data.events || [];
+
+  return events
+    .filter((e: any) => e.segs && e.segs.length > 0)
+    .map((e: any) => {
+      const text = e.segs.map((s: any) => s.utf8 || '').join('').trim();
+      const startMs = Math.max(0, parseInt(String(e.tStartMs || 0), 10));
+      const durationMs = Math.max(0, parseInt(String(e.dDurationMs || 0), 10));
+      return {
+        text,
+        startMs,
+        durationMs
+      };
+    })
+    .filter((s: NormalizedSegment) => s.text.length > 0);
+}
+
+/**
+ * Handles fallback when Innertube is blocked by bot detection or fails on cloud datacenter IPs.
  */
 async function getVideoDataFromFallback(
   videoId: string,
@@ -108,8 +145,8 @@ async function getVideoDataFromFallback(
 
 /**
  * Fetches video details, captions track list, and transcript.
- * Primary: youtubei.js (Innertube).
- * Fallback: youtube-transcript-plus (used if Innertube fails, is blocked, or returns no transcript).
+ * Primary: youtubei.js (Innertube with ClientType.ANDROID and direct signed timedtext).
+ * Fallback: youtube-transcript-plus (used if Innertube fails or is blocked).
  */
 export async function getVideoData(
   videoId: string,
@@ -190,46 +227,29 @@ export async function getVideoData(
   // Select language using the 4-step logic
   const selected = selectLanguage(availableLanguages, langParam);
 
-  // Attempt transcript extraction: primary youtubei.js first
+  // Attempt transcript extraction:
+  // 1) Primary: Fetch directly using Innertube's signed timedtext URL (fmt=json3)
   let segments: NormalizedSegment[] | null = null;
-  try {
-    const transcriptInfo = await info.getTranscript();
-    let targetTranscript = transcriptInfo;
+  const matchingTrack =
+    rawTracks.find(
+      (t: any) => t.language_code.toLowerCase() === selected.code.toLowerCase()
+    ) || rawTracks[0];
 
-    if (
-      selected.name &&
-      transcriptInfo.selectedLanguage &&
-      selected.name !== transcriptInfo.selectedLanguage
-    ) {
-      try {
-        targetTranscript = await transcriptInfo.selectLanguage(selected.name);
-      } catch {
-        // Keep initial transcript if language switch fails
-      }
+  if (matchingTrack?.base_url) {
+    try {
+      segments = await fetchTimedTextSegments(matchingTrack.base_url);
+    } catch {
+      // Direct timedtext failed, will attempt fallback library below
     }
-
-    const initialSegments =
-      targetTranscript.transcript?.content?.body?.initial_segments;
-    if (Array.isArray(initialSegments) && initialSegments.length > 0) {
-      segments = initialSegments
-        .map((seg: any) => {
-          const startMs = Math.max(0, parseInt(seg.start_ms, 10) || 0);
-          const endMs = Math.max(startMs, parseInt(seg.end_ms, 10) || startMs);
-          return {
-            text: (seg.snippet?.toString?.() || seg.snippet?.text || '').trim(),
-            startMs,
-            durationMs: Math.max(0, endMs - startMs)
-          };
-        })
-        .filter((s: NormalizedSegment) => s.text.length > 0);
-    }
-  } catch {
-    // Primary extraction failed, fall back to youtube-transcript-plus
   }
 
-  // Fallback to youtube-transcript-plus if primary failed or produced no segments
+  // 2) Fallback to youtube-transcript-plus if direct timedtext failed or had no segments
   if (!segments || segments.length === 0) {
-    segments = await fetchFallbackTranscript(videoId, selected.code);
+    try {
+      segments = await fetchFallbackTranscript(videoId, selected.code);
+    } catch {
+      // Fallback failed
+    }
   }
 
   if (!segments || segments.length === 0) {

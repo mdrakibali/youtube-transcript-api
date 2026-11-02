@@ -1,0 +1,14 @@
+info:
+  name: Get Supadata Youtube Transcript
+  type: http
+
+http:
+  method: GET
+  url: GET https://api.supadata.ai/v1/transcript
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
